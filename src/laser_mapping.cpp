@@ -67,16 +67,16 @@ bool LaserMapping::Init() {
 }
 
 
-void LaserMapping::Run() {
+bool LaserMapping::Run() {
     if (!SyncPackages()) {
-        return;
+        return false;
     }
 
     /// IMU process, kf prediction, undistortion
     p_imu_->Process(measures_, kf_, scan_undistort_);
     if (scan_undistort_->empty() || (scan_undistort_ == nullptr)) {
         RCLCPP_WARN(rclcpp::get_logger("laser_mapping"), "No point, skip this scan!");
-        return;
+        return false;
     }
 
     /// the first scan
@@ -84,7 +84,7 @@ void LaserMapping::Run() {
         ivox_->AddPoints(scan_undistort_->points);
         first_lidar_time_ = measures_.lidar_bag_time_;
         flg_first_scan_ = false;
-        return;
+        return false;
     }
     flg_EKF_inited_ = (measures_.lidar_bag_time_ - first_lidar_time_) >= INIT_TIME;
 
@@ -99,7 +99,7 @@ void LaserMapping::Run() {
     int cur_pts = scan_down_body_->size();
     if (cur_pts < 5) {
         RCLCPP_WARN(rclcpp::get_logger("laser_mapping"), "Too few points %d / %ld, skip this scan!", cur_pts, scan_undistort_->size());
-        return;
+        return false;
     }
     scan_down_world_->resize(cur_pts);
     nearest_points_.resize(cur_pts);
@@ -129,6 +129,8 @@ void LaserMapping::Run() {
 
     // Debug variables
     frame_num_++;
+
+    return true;
 }
 
 void LaserMapping::StandardPCLCallBack(const sensor_msgs::msg::PointCloud2::UniquePtr &msg) {
@@ -191,7 +193,7 @@ void LaserMapping::IMUCallBack(const sensor_msgs::msg::Imu::UniquePtr &msg_in) {
     sensor_msgs::msg::Imu::SharedPtr msg(new sensor_msgs::msg::Imu(*msg_in));
 
     if (abs(timediff_lidar_wrt_imu_) > 0.1 && config_.time_sync_en) {
-        msg->header.stamp = rclcpp::Time((timediff_lidar_wrt_imu_ + rclcpp::Time(msg_in->header.stamp).seconds()) * 1e9);
+        msg->header.stamp = rclcpp::Time(static_cast<int64_t>((timediff_lidar_wrt_imu_ + rclcpp::Time(msg_in->header.stamp).seconds()) * 1e9));
     }
 
     double timestamp = rclcpp::Time(msg->header.stamp).seconds();
@@ -438,7 +440,6 @@ void LaserMapping::ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double
         "    ObsModel (IEKF Build Jacobian)");
 }
 
-///////////////////////////  private method /////////////////////////////////////////////////////////////////////
 template <typename T>
 void LaserMapping::SetPosestamp(T &out) {
     out.pose.position.x = state_point_.pos(0);
@@ -449,7 +450,45 @@ void LaserMapping::SetPosestamp(T &out) {
     out.pose.orientation.z = state_point_.rot.coeffs()[2];
     out.pose.orientation.w = state_point_.rot.coeffs()[3];
 }
+template void LaserMapping::SetPosestamp(geometry_msgs::msg::PoseWithCovariance &);
+template void LaserMapping::SetPosestamp(geometry_msgs::msg::PoseStamped &);
 
+PointCloudType::Ptr LaserMapping::GetFrameWorld(bool dense) {
+    PointCloudType::Ptr laser_cloud_world_ptr;
+    if (dense) {
+        PointCloudType::Ptr laser_cloud_world_dense_ptr(scan_undistort_);
+        int size = laser_cloud_world_dense_ptr->points.size();
+        laser_cloud_world_ptr.reset(new PointCloudType(size, 1));
+        for (int i = 0; i < size; i++) {
+            PointBodyToWorld(&laser_cloud_world_dense_ptr->points[i], &laser_cloud_world_ptr->points[i]);
+        }
+    } else {
+        laser_cloud_world_ptr = scan_down_world_;
+    }
+    return laser_cloud_world_ptr;
+}
+
+PointCloudType::Ptr LaserMapping::GetFrameBody() {
+    int size = scan_undistort_->points.size();
+    PointCloudType::Ptr laser_cloud_body_ptr(new PointCloudType(size, 1));
+
+    for (int i = 0; i < size; i++) {
+        PointBodyLidarToIMU(&scan_undistort_->points[i], &laser_cloud_body_ptr->points[i]);
+    }
+
+    return laser_cloud_body_ptr;
+}
+PointCloudType::Ptr LaserMapping::GetFrameEffectWorld() {
+    int size = corr_pts_.size();
+    PointCloudType::Ptr laser_cloud_effect_world_ptr(new PointCloudType(size, 1));
+
+    for (int i = 0; i < size; i++) {
+        PointBodyToWorld(corr_pts_[i].head<3>(), &laser_cloud_effect_world_ptr->points[i]);
+    }
+    return laser_cloud_effect_world_ptr;
+}
+
+///////////////////////////  private method /////////////////////////////////////////////////////////////////////
 void LaserMapping::PointBodyToWorld(const PointType *pi, PointType *const po) {
     V3D p_body(pi->x, pi->y, pi->z);
     V3D p_global(state_point_.rot * (state_point_.offset_R_L_I * p_body + state_point_.offset_T_L_I) +

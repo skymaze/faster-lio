@@ -8,11 +8,13 @@
 
 #include <pcl/filters/voxel_grid.h>
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <geometry_msgs/msg/pose_with_covariance.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <livox_ros_driver2/msg/custom_msg.hpp>
 
 #include <condition_variable>
 #include <thread>
-#include <sensor_msgs/msg/point_cloud2.hpp>
-#include <livox_ros_driver2/msg/custom_msg.hpp>
 
 #include "imu_processing.hpp"
 #include "ivox3d/ivox3d.h"
@@ -57,7 +59,7 @@ class LaserMapping {
 
     bool Init();
 
-    void Run();
+    bool Run();
 
     // callbacks of lidar and imu
     void StandardPCLCallBack(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
@@ -70,10 +72,17 @@ class LaserMapping {
     /// interface of mtk, customized obseravtion model
     void ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_data);
 
-   private:
+    double GetLidarEndTime() const { return lidar_end_time_; }
+    auto GetP() const { return kf_.get_P(); }
+
     template <typename T>
     void SetPosestamp(T &out);
 
+    PointCloudType::Ptr GetFrameWorld(bool dense = false);
+    PointCloudType::Ptr GetFrameBody();
+    PointCloudType::Ptr GetFrameEffectWorld();
+
+   private:
     void PointBodyToWorld(PointType const *pi, PointType *const po);
     void PointBodyToWorld(const V3F &pi, PointType *const po);
     void PointBodyLidarToIMU(PointType const *const pi, PointType *const po);

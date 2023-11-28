@@ -1,5 +1,11 @@
 #include <rclcpp/rclcpp.hpp>
+#include <tf2_ros/transform_broadcaster.h>
+#include <nav_msgs/msg/path.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include "geometry_msgs/msg/transform_stamped.hpp"
 #include "laser_mapping.hpp"
+#include <vector>
 
 
 class LaserMappingNode : public rclcpp::Node
@@ -12,7 +18,7 @@ public:
         this->declare_parameter<bool>("publish.scan_publish_en", true);
         this->declare_parameter<bool>("publish.scan_effect_pub_en", true);
         this->declare_parameter<bool>("publish.dense_publish_en", true);
-        this->declare_parameter<bool>("publish.scan_bodyframe_pub_en", true);
+        this->declare_parameter<bool>("publish.scan_body_pub_en", true);
         this->declare_parameter<std::string>("publish.tf_imu_frame", "body");
         this->declare_parameter<std::string>("publish.tf_world_frame", "camera_init");
 
@@ -100,6 +106,34 @@ public:
         );
 
         timer_ = this->create_wall_timer(std::chrono::milliseconds(1), std::bind(&LaserMappingNode::run, this));
+
+        odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/Odometry", 20);
+        tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(this);
+
+        path_publish_en_ = this->get_parameter("publish.path_publish_en").as_bool();
+        if (path_publish_en_) {
+            RCLCPP_INFO(this->get_logger(), "Path Publish Enabled");
+            path_pub_ = this->create_publisher<nav_msgs::msg::Path>("/path", 20);
+        }
+
+        scan_publish_en_ = this->get_parameter("publish.scan_publish_en").as_bool();
+        if (scan_publish_en_) {
+            RCLCPP_INFO(this->get_logger(), "Scan Publish Enabled");
+            scan_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered", 20);
+        }
+        dense_publish_en_ = this->get_parameter("publish.dense_publish_en").as_bool();
+        
+        scan_effect_pub_en_ = this->get_parameter("publish.scan_effect_pub_en").as_bool();
+        if (scan_effect_pub_en_) {
+            RCLCPP_INFO(this->get_logger(), "Scan Effect Publish Enabled");
+            scan_effect_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_effected", 20);
+        }
+
+        scan_body_pub_en_ = this->get_parameter("publish.scan_body_pub_en").as_bool();
+        if (scan_body_pub_en_) {
+            RCLCPP_INFO(this->get_logger(), "Scan Bodyframe Publish Enabled");
+            scan_body_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered_body", 20);
+        }
     }
 private:
     std::shared_ptr<LaserMapping> laser_mapping_;
@@ -108,9 +142,101 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
     rclcpp::TimerBase::SharedPtr timer_;
 
-    void run() const
+    // Odometry Publisher
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
+    // transform
+    std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+
+    bool path_publish_en_;
+    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
+    std::vector<geometry_msgs::msg::PoseStamped> poses_;
+
+    bool scan_publish_en_;
+    bool dense_publish_en_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr scan_pub_;
+   
+    bool scan_effect_pub_en_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr scan_effect_pub_;
+
+    bool scan_body_pub_en_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr scan_body_pub_;
+
+    void run()
     {
-        laser_mapping_->Run();
+        if (laser_mapping_->Run()) {
+            // Publish Odometry
+            nav_msgs::msg::Odometry odom_aft_mapped_;
+            odom_aft_mapped_.header.frame_id = "camera_init";
+            odom_aft_mapped_.header.stamp = rclcpp::Time(static_cast<int64_t>(laser_mapping_->GetLidarEndTime() * 1e9));
+            odom_aft_mapped_.child_frame_id = "body";
+            laser_mapping_->SetPosestamp(odom_aft_mapped_.pose);
+            odom_pub_->publish(odom_aft_mapped_);
+
+            auto P = laser_mapping_->GetP();
+            for (int i = 0; i < 6; i ++)
+            {
+                int k = i < 3 ? i + 3 : i - 3;
+                odom_aft_mapped_.pose.covariance[i*6 + 0] = P(k, 3);
+                odom_aft_mapped_.pose.covariance[i*6 + 1] = P(k, 4);
+                odom_aft_mapped_.pose.covariance[i*6 + 2] = P(k, 5);
+                odom_aft_mapped_.pose.covariance[i*6 + 3] = P(k, 0);
+                odom_aft_mapped_.pose.covariance[i*6 + 4] = P(k, 1);
+                odom_aft_mapped_.pose.covariance[i*6 + 5] = P(k, 2);
+            }
+
+            geometry_msgs::msg::TransformStamped trans;
+            trans.header.stamp = rclcpp::Time(static_cast<int64_t>(laser_mapping_->GetLidarEndTime() * 1e9));
+            trans.header.frame_id = "camera_init";
+            trans.child_frame_id = "body";
+            trans.transform.translation.x = odom_aft_mapped_.pose.pose.position.x;
+            trans.transform.translation.y = odom_aft_mapped_.pose.pose.position.y;
+            trans.transform.translation.z = odom_aft_mapped_.pose.pose.position.z;
+            trans.transform.rotation.w = odom_aft_mapped_.pose.pose.orientation.w;
+            trans.transform.rotation.x = odom_aft_mapped_.pose.pose.orientation.x;
+            trans.transform.rotation.y = odom_aft_mapped_.pose.pose.orientation.y;
+            trans.transform.rotation.z = odom_aft_mapped_.pose.pose.orientation.z;
+            tf_broadcaster_->sendTransform(trans);
+
+            if (path_publish_en_) {
+                geometry_msgs::msg::PoseStamped pose;
+                laser_mapping_->SetPosestamp(pose);
+                pose.header.frame_id =  "camera_init";
+                pose.header.stamp = rclcpp::Time(static_cast<int64_t>(laser_mapping_->GetLidarEndTime() * 1e9));
+                poses_.push_back(pose);
+                nav_msgs::msg::Path path_;
+                path_.poses = poses_;
+                path_.header.frame_id = "camera_init";
+                path_.header.stamp = rclcpp::Time(static_cast<int64_t>(laser_mapping_->GetLidarEndTime() * 1e9));
+                path_pub_->publish(path_);
+            }
+
+            if (scan_publish_en_) {
+                PointCloudType::Ptr scan = laser_mapping_->GetFrameWorld(dense_publish_en_);
+                sensor_msgs::msg::PointCloud2 msg;
+                pcl::toROSMsg(*scan, msg);
+                msg.header.frame_id = "camera_init";
+                msg.header.stamp = rclcpp::Time(static_cast<int64_t>(laser_mapping_->GetLidarEndTime() * 1e9));
+                scan_pub_->publish(msg);
+            }
+
+            if (scan_effect_pub_en_) {
+                PointCloudType::Ptr scan = laser_mapping_->GetFrameEffectWorld();
+                sensor_msgs::msg::PointCloud2 msg;
+                pcl::toROSMsg(*scan, msg);
+                msg.header.frame_id = "camera_init";
+                msg.header.stamp = rclcpp::Time(static_cast<int64_t>(laser_mapping_->GetLidarEndTime() * 1e9));
+                scan_effect_pub_->publish(msg);
+            }
+
+            if (scan_body_pub_en_) {
+                PointCloudType::Ptr scan = laser_mapping_->GetFrameBody();
+                sensor_msgs::msg::PointCloud2 msg;
+                pcl::toROSMsg(*scan, msg);
+                msg.header.frame_id = "body";
+                msg.header.stamp = rclcpp::Time(static_cast<int64_t>(laser_mapping_->GetLidarEndTime() * 1e9));
+                scan_body_pub_->publish(msg);
+            }
+        }
     }
 
 };
