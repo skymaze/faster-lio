@@ -5,7 +5,7 @@
 #ifndef FASTER_LIO_IVOX3D_H
 #define FASTER_LIO_IVOX3D_H
 
-#include <glog/logging.h>
+#include <rclcpp/rclcpp.hpp>
 #include <execution>
 #include <list>
 #include <thread>
@@ -13,7 +13,6 @@
 #include "eigen_types.h"
 #include "ivox3d_node.hpp"
 
-namespace faster_lio {
 
 enum class IVoxNodeType {
     DEFAULT,  // linear ivox
@@ -230,7 +229,7 @@ void IVox<dim, node_type, PointType>::GenerateNearbyGrids() {
                          KeyType(-1, 1, 1),  KeyType(1, -1, 1),  KeyType(1, 1, -1),  KeyType(-1, -1, 1),
                          KeyType(-1, 1, -1), KeyType(1, -1, -1), KeyType(-1, -1, -1)};
     } else {
-        LOG(ERROR) << "Unknown nearby_type!";
+        RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Unknown nearby_type!");
     }
 }
 
@@ -301,7 +300,5 @@ std::vector<float> IVox<dim, node_type, PointType>::StatGridPoints() const {
     float stddev = num > 1 ? sqrt((float(sum_square) - num * ave * ave) / (num - 1)) : 0;
     return std::vector<float>{valid_num, ave, max, min, stddev};
 }
-
-}  // namespace faster_lio
 
 #endif

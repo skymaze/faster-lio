@@ -1,13 +1,12 @@
-#ifndef FASTER_LIO_POINTCLOUD_PROCESSING_H
-#define FASTER_LIO_POINTCLOUD_PROCESSING_H
+#pragma once
 
-#include <livox_ros_driver/CustomMsg.h>
+#include <livox_ros_driver2/msg/custom_msg.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 
-#include "common_lib.h"
+#include "common_lib.hpp"
 
 namespace velodyne_ros {
 struct EIGEN_ALIGN16 Point {
@@ -53,8 +52,6 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(ouster_ros::Point,
                                   )
 // clang-format on
 
-namespace faster_lio {
-
 enum class LidarType { AVIA = 1, VELO32, OUST64 };
 
 /**
@@ -69,8 +66,8 @@ class PointCloudPreprocess {
     ~PointCloudPreprocess() = default;
 
     /// processors
-    void Process(const livox_ros_driver::CustomMsg::ConstPtr &msg, PointCloudType::Ptr &pcl_out);
-    void Process(const sensor_msgs::PointCloud2::ConstPtr &msg, PointCloudType::Ptr &pcl_out);
+    void Process(const livox_ros_driver2::msg::CustomMsg::UniquePtr &msg, PointCloudType::Ptr &pcl_out);
+    void Process(const sensor_msgs::msg::PointCloud2::UniquePtr &msg, PointCloudType::Ptr &pcl_out);
     void Set(LidarType lid_type, double bld, int pfilt_num);
 
     // accessors
@@ -83,9 +80,9 @@ class PointCloudPreprocess {
     void SetLidarType(LidarType lt) { lidar_type_ = lt; }
 
    private:
-    void AviaHandler(const livox_ros_driver::CustomMsg::ConstPtr &msg);
-    void Oust64Handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
-    void VelodyneHandler(const sensor_msgs::PointCloud2::ConstPtr &msg);
+    void AviaHandler(const livox_ros_driver2::msg::CustomMsg::UniquePtr &msg);
+    void Oust64Handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
+    void VelodyneHandler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
 
     PointCloudType cloud_full_, cloud_out_;
 
@@ -97,6 +94,3 @@ class PointCloudPreprocess {
     float time_scale_ = 1e-3;
     bool given_offset_time_ = false;
 };
-}  // namespace faster_lio
-
-#endif
